@@ -1,270 +1,512 @@
 <!doctype html>
 <html>
 <head>
-<meta charset="utf-8">
-<title>Snake Clash – Fake 3D</title>
-<style>
-html,body{margin:0;padding:0;overflow:hidden;background:#0b0f14;}
-canvas{display:block;}
-</style>
+  <meta charset="utf-8" />
+  <title>Snake Clash – Fake 3D (Grow + Speed + Bisect)</title>
+  <style>
+    html, body { margin:0; padding:0; overflow:hidden; background:#0b0f14; }
+    canvas { display:block; }
+    .hud {
+      position: fixed; left: 12px; top: 10px; color: #cbd5e1;
+      font: 14px system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      opacity: 0.9; user-select: none;
+    }
+  </style>
 </head>
 <body>
 <canvas id="c"></canvas>
+<div class="hud">Move mouse • Eat dots to grow • Bigger body kills • Cut smaller snakes in the middle</div>
+
 <script>
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("2d");
 
-const canvas=document.getElementById("c");
-const ctx=canvas.getContext("2d");
-function resize(){canvas.width=innerWidth;canvas.height=innerHeight;}
-addEventListener("resize",resize);resize();
+function resize(){ canvas.width = innerWidth; canvas.height = innerHeight; }
+addEventListener("resize", resize);
+resize();
 
-const WORLD_W=2600,WORLD_H=2600;
-const FOOD_COUNT=250;
-const AI_COUNT=6;
+const WORLD_W = 2600, WORLD_H = 2600;
+const FOOD_TARGET = 280;
+const AI_TARGET = 7;
 
-const CAMERA_TILT=0.72;
-const MIN_SCALE=0.55;
-const MAX_SCALE=1.15;
-const HORIZON_PUSH=140;
+// Fake-3D camera
+const CAMERA_TILT = 0.72;
+const MIN_SCALE = 0.55;
+const MAX_SCALE = 1.15;
+const HORIZON_PUSH = 140;
 
-let mouse={x:canvas.width/2,y:canvas.height/2};
-addEventListener("mousemove",e=>{mouse.x=e.clientX;mouse.y=e.clientY;});
+let mouse = { x: canvas.width/2, y: canvas.height/2 };
+addEventListener("mousemove", e => (mouse = { x:e.clientX, y:e.clientY }));
 
-function clamp(v,a,b){return Math.max(a,Math.min(b,v));}
-function dist(ax,ay,bx,by){return Math.hypot(ax-bx,ay-by);}
-function rand(a,b){return a+Math.random()*(b-a);}
+function clamp(v,a,b){ return Math.max(a, Math.min(b, v)); }
+function dist(ax,ay,bx,by){ return Math.hypot(ax-bx, ay-by); }
+function rand(a,b){ return a + Math.random()*(b-a); }
 
-function perspectiveFor(y){
-const t=clamp(y/WORLD_H,0,1);
-return MIN_SCALE+(MAX_SCALE-MIN_SCALE)*Math.pow(t,1.25);
+function shade(hex, amt){
+  const c = hex.replace("#","").match(/.{2}/g).map(x => parseInt(x,16));
+  const t = c.map(v => clamp(v+amt, 0, 255));
+  return "#" + t.map(v => v.toString(16).padStart(2,"0")).join("");
 }
 
-function worldToScreen(wx,wy,cam){
-const s=perspectiveFor(wy);
-const rx=wx-cam.x;
-const ry=wy-cam.y;
-return{
-x:canvas.width/2+rx*s,
-y:canvas.height/2+(ry*s*CAMERA_TILT)-(1-s)*HORIZON_PUSH,
-s
-};
+function perspectiveFor(worldY){
+  const t = clamp(worldY / WORLD_H, 0, 1); // 0 top, 1 bottom
+  return MIN_SCALE + (MAX_SCALE - MIN_SCALE) * Math.pow(t, 1.25);
 }
 
-class Food{
-constructor(){
-this.x=rand(0,WORLD_W);
-this.y=rand(0,WORLD_H);
-this.r=rand(5,7);
-}
-}
-
-class Snake{
-constructor(x,y,color,isPlayer=false,segments=null){
-this.isPlayer=isPlayer;
-this.color=color;
-this.x=x;this.y=y;
-this.vx=0;this.vy=0;
-this.speed=2.4;
-this.wander=rand(0,Math.PI*2);
-this.segRadius=11;
-this.spacing=7.5;
-
-if(segments){
-this.segments=segments.map(p=>({x:p.x,y:p.y}));
-this.targetSegments=this.segments.length;
-this.x=this.segments[0].x;
-this.y=this.segments[0].y;
-}else{
-this.targetSegments=26;
-this.segments=[];
-for(let i=0;i<this.targetSegments;i++){
-this.segments.push({x:x-i*this.spacing,y});
-}
-}
+function worldToScreen(wx, wy, cam){
+  const s = perspectiveFor(wy);
+  const rx = wx - cam.x;
+  const ry = wy - cam.y;
+  const sx = canvas.width/2 + rx * s;
+  const sy = canvas.height/2 + (ry * s * CAMERA_TILT) - (1 - s) * HORIZON_PUSH;
+  return { x:sx, y:sy, s };
 }
 
-get length(){return this.targetSegments;}
+function drawGround(cam){
+  const g = ctx.createLinearGradient(0, 0, 0, canvas.height);
+  g.addColorStop(0, "#070a0f");
+  g.addColorStop(0.55, "#0b1320");
+  g.addColorStop(1, "#071018");
+  ctx.fillStyle = g;
+  ctx.fillRect(0,0,canvas.width,canvas.height);
 
-grow(n){
-this.targetSegments+=n;
-this.targetSegments=Math.min(this.targetSegments,260);
+  ctx.save();
+  ctx.globalAlpha = 0.28;
+
+  const step = 160;
+  const startX = Math.floor((cam.x - 1200)/step)*step;
+  const endX   = Math.ceil((cam.x + 1200)/step)*step;
+  const startY = Math.floor((cam.y - 1200)/step)*step;
+  const endY   = Math.ceil((cam.y + 1200)/step)*step;
+
+  // vertical lines
+  for(let x = startX; x <= endX; x += step){
+    ctx.beginPath();
+    let first = true;
+    for(let y = startY; y <= endY; y += 80){
+      const p = worldToScreen(x, y, cam);
+      if(first){ ctx.moveTo(p.x, p.y); first=false; } else ctx.lineTo(p.x, p.y);
+    }
+    ctx.strokeStyle = "#1c2a3a";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+
+  // horizontal lines
+  for(let y = startY; y <= endY; y += step){
+    ctx.beginPath();
+    let first = true;
+    for(let x = startX; x <= endX; x += 80){
+      const p = worldToScreen(x, y, cam);
+      if(first){ ctx.moveTo(p.x, p.y); first=false; } else ctx.lineTo(p.x, p.y);
+    }
+    ctx.strokeStyle = "#152235";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+
+  ctx.restore();
 }
 
-update(){
-let ax=0,ay=0;
-
-if(this.isPlayer){
-const dx=mouse.x-canvas.width/2;
-const dy=mouse.y-canvas.height/2;
-const ang=Math.atan2(dy,dx);
-ax=Math.cos(ang);ay=Math.sin(ang);
-}else{
-this.wander+=rand(-0.1,0.1);
-ax=Math.cos(this.wander);
-ay=Math.sin(this.wander);
+class Food {
+  constructor(x=null, y=null){
+    this.x = (x ?? rand(0, WORLD_W));
+    this.y = (y ?? rand(0, WORLD_H));
+    this.r = rand(5, 7);
+  }
 }
 
-const len=Math.hypot(ax,ay)||1;
-ax/=len;ay/=len;
+let ticks = 0; // used for speed-over-time
 
-const speedFactor=1-Math.min(0.35,(this.targetSegments-26)*0.0015);
-const targetSpeed=this.speed*speedFactor;
+class Snake {
+  constructor(x,y,color,isPlayer=false, initialSegments=null, initialLen=1){
+    this.isPlayer = isPlayer;
+    this.color = color;
 
-this.vx=this.vx*0.84+ax*targetSpeed*0.16;
-this.vy=this.vy*0.84+ay*targetSpeed*0.16;
+    this.x = x; this.y = y;
+    this.vx = 0; this.vy = 0;
 
-this.x+=this.vx;
-this.y+=this.vy;
-this.x=clamp(this.x,0,WORLD_W);
-this.y=clamp(this.y,0,WORLD_H);
+    this.segRadius = 11;
+    this.spacing = 7.5;
 
-this.segments[0].x=this.x;
-this.segments[0].y=this.y;
+    // “base speed” then we add time ramp + length effects
+    this.baseSpeed = isPlayer ? 2.35 : 2.25;
 
-for(let i=1;i<this.segments.length;i++){
-const prev=this.segments[i-1];
-const cur=this.segments[i];
-const dx=cur.x-prev.x;
-const dy=cur.y-prev.y;
-const d=Math.hypot(dx,dy)||0.0001;
-const pull=(d-this.spacing)/d;
-cur.x-=dx*pull;
-cur.y-=dy*pull;
+    // AI steering
+    this.wander = rand(0, Math.PI*2);
+    this.foodTarget = null;
+
+    if(initialSegments && initialSegments.length >= 2){
+      this.segments = initialSegments.map(p => ({x:p.x, y:p.y}));
+      this.targetSegments = this.segments.length;
+      this.x = this.segments[0].x;
+      this.y = this.segments[0].y;
+    } else {
+      // start as a single dot (or small length if you want)
+      this.targetSegments = Math.max(1, initialLen);
+      this.segments = [];
+      for(let i=0;i<this.targetSegments;i++){
+        this.segments.push({ x: x - i*this.spacing, y });
+      }
+    }
+  }
+
+  get length(){ return this.targetSegments; }
+
+  grow(n){
+    this.targetSegments = Math.min(300, this.targetSegments + n);
+  }
+
+  // speed increases over time; also a tiny growth boost, but long snakes aren’t crazy fast
+  currentSpeed(){
+    const timeRamp = 1 + Math.min(0.65, ticks / (60 * 90)); // ~+65% by ~90s
+    const growBoost = 1 + Math.min(0.20, (this.length-1) * 0.002); // up to +20%
+    const longPenalty = 1 - Math.min(0.35, Math.max(0, this.length-60) * 0.0035); // slows very long snakes
+    return this.baseSpeed * timeRamp * growBoost * longPenalty;
+  }
+
+  pickFoodTarget(foods){
+    // choose nearest food occasionally
+    let best = null, bestD = Infinity;
+    for(let i=0;i<foods.length;i++){
+      const f = foods[i];
+      const d = dist(this.x,this.y,f.x,f.y);
+      if(d < bestD){ bestD = d; best = f; }
+    }
+    this.foodTarget = best;
+  }
+
+  update(foods){
+    let ax=0, ay=0;
+
+    if(this.isPlayer){
+      const dx = mouse.x - canvas.width/2;
+      const dy = mouse.y - canvas.height/2;
+      const ang = Math.atan2(dy, dx);
+      ax = Math.cos(ang);
+      ay = Math.sin(ang);
+    } else {
+      // AI: chase food sometimes, otherwise wander
+      if(!this.foodTarget || Math.random() < 0.02) this.pickFoodTarget(foods);
+
+      if(this.foodTarget){
+        const dx = this.foodTarget.x - this.x;
+        const dy = this.foodTarget.y - this.y;
+        const ang = Math.atan2(dy, dx);
+        // blend wander + target
+        this.wander += rand(-0.08, 0.08);
+        const wx = Math.cos(this.wander), wy = Math.sin(this.wander);
+        ax = Math.cos(ang) * 0.78 + wx * 0.22;
+        ay = Math.sin(ang) * 0.78 + wy * 0.22;
+      } else {
+        this.wander += rand(-0.10, 0.10);
+        ax = Math.cos(this.wander);
+        ay = Math.sin(this.wander);
+      }
+    }
+
+    const len = Math.hypot(ax,ay) || 1;
+    ax/=len; ay/=len;
+
+    const spd = this.currentSpeed();
+    this.vx = this.vx*0.84 + ax*spd*0.16;
+    this.vy = this.vy*0.84 + ay*spd*0.16;
+
+    this.x += this.vx;
+    this.y += this.vy;
+
+    this.x = clamp(this.x, 0, WORLD_W);
+    this.y = clamp(this.y, 0, WORLD_H);
+
+    // head
+    this.segments[0].x = this.x;
+    this.segments[0].y = this.y;
+
+    // follow
+    for(let i=1;i<this.segments.length;i++){
+      const prev = this.segments[i-1];
+      const cur  = this.segments[i];
+      const dx = cur.x - prev.x;
+      const dy = cur.y - prev.y;
+      const d = Math.hypot(dx,dy) || 0.0001;
+
+      const pull = (d - this.spacing) / d;
+      cur.x -= dx * pull;
+      cur.y -= dy * pull;
+    }
+
+    // match length
+    while(this.segments.length < this.targetSegments){
+      const last = this.segments[this.segments.length-1];
+      this.segments.push({ x:last.x, y:last.y });
+    }
+    if(this.segments.length > this.targetSegments){
+      this.segments.length = this.targetSegments;
+    }
+  }
 }
 
-while(this.segments.length<this.targetSegments){
-const last=this.segments[this.segments.length-1];
-this.segments.push({x:last.x,y:last.y});
-}
-if(this.segments.length>this.targetSegments){
-this.segments.length=this.targetSegments;
-}
-}
+const player = new Snake(WORLD_W/2, WORLD_H/2, "#22d3ee", true, null, 1);
+
+let ai = [];
+for(let i=0;i<AI_TARGET;i++){
+  ai.push(new Snake(
+    rand(100, WORLD_W-100),
+    rand(100, WORLD_H-100),
+    `hsl(${rand(0,360)},70%,55%)`,
+    false,
+    null,
+    Math.floor(rand(8, 22)) // AI starts a bit bigger
+  ));
 }
 
-const player=new Snake(WORLD_W/2,WORLD_H/2,"#22d3ee",true);
+let food = Array.from({length: FOOD_TARGET}, () => new Food());
 
-let ai=[];
-for(let i=0;i<AI_COUNT;i++){
-ai.push(new Snake(rand(100,WORLD_W-100),rand(100,WORLD_H-100),`hsl(${rand(0,360)},70%,55%)`));
+function ensureFood(){
+  while(food.length < FOOD_TARGET) food.push(new Food());
 }
-
-let food=Array.from({length:FOOD_COUNT},()=>new Food());
-function respawnFood(){while(food.length<FOOD_COUNT)food.push(new Food());}
 
 function eatFood(s){
-for(let i=food.length-1;i>=0;i--){
-if(dist(s.x,s.y,food[i].x,food[i].y)<s.segRadius+6){
-s.grow(3);
-food.splice(i,1);
-}
-}
-}
-
-function bisectSnake(enemy,hitIndex){
-const left=enemy.segments.slice(0,hitIndex);
-const right=enemy.segments.slice(hitIndex+1);
-const parts=[];
-const MIN=10;
-
-if(left.length>=MIN){
-parts.push(new Snake(left[0].x,left[0].y,enemy.color,false,left));
-}else{
-left.forEach(p=>food.push(new Food()));
+  for(let i=food.length-1;i>=0;i--){
+    const f = food[i];
+    if(dist(s.x,s.y,f.x,f.y) < s.segRadius + 6){
+      // growth: player and AI both grow
+      s.grow( (s.isPlayer ? 2 : 1) + (Math.random() < 0.25 ? 1 : 0) );
+      food.splice(i,1);
+    }
+  }
 }
 
-if(right.length>=MIN){
-parts.push(new Snake(right[0].x,right[0].y,enemy.color,false,right));
-}else{
-right.forEach(p=>food.push(new Food()));
+// Drop food along a cut/snake death
+function dropFoodFromSegments(segments, countFactor=0.35){
+  const n = Math.min(90, Math.max(6, Math.floor(segments.length * countFactor)));
+  for(let k=0;k<n;k++){
+    const p = segments[Math.floor(rand(0, segments.length))];
+    if(!p) continue;
+    food.push(new Food(
+      clamp(p.x + rand(-18,18), 0, WORLD_W),
+      clamp(p.y + rand(-18,18), 0, WORLD_H)
+    ));
+  }
 }
 
-return parts;
+// Bisect a snake into 2 snakes at hitIndex (player hit enemy body segment hitIndex)
+function bisectSnake(enemy, hitIndex){
+  const left = enemy.segments.slice(0, hitIndex);
+  const right = enemy.segments.slice(hitIndex + 1);
+  const parts = [];
+  const MIN_PART = 10;
+
+  if(left.length >= MIN_PART){
+    const s1 = new Snake(left[0].x, left[0].y, enemy.color, false, left, left.length);
+    s1.vx = enemy.vx; s1.vy = enemy.vy;
+    parts.push(s1);
+  } else {
+    dropFoodFromSegments(left, 0.6);
+  }
+
+  if(right.length >= MIN_PART){
+    const s2 = new Snake(right[0].x, right[0].y, enemy.color, false, right, right.length);
+    s2.vx = enemy.vx; s2.vy = enemy.vy;
+    parts.push(s2);
+  } else {
+    dropFoodFromSegments(right, 0.6);
+  }
+
+  // extra food at cut point
+  const cut = enemy.segments[hitIndex];
+  if(cut){
+    for(let k=0;k<10;k++){
+      food.push(new Food(
+        clamp(cut.x + rand(-22,22), 0, WORLD_W),
+        clamp(cut.y + rand(-22,22), 0, WORLD_H)
+      ));
+    }
+  }
+
+  return parts;
 }
 
+let dead = false;
+function gameOver(){
+  if(dead) return;
+  dead = true;
+  setTimeout(()=>{ alert("Game Over!"); location.reload(); }, 60);
+}
+
+// YOUR RULES: head-to-body
 function snakeCombat(){
-for(let i=ai.length-1;i>=0;i--){
-const enemy=ai[i];
-let hitIndex=-1;
+  const HEAD_R = player.segRadius * 1.05;
 
-for(let s=1;s<enemy.segments.length;s++){
-if(dist(player.x,player.y,enemy.segments[s].x,enemy.segments[s].y)
-<player.segRadius+enemy.segRadius){
-hitIndex=s;
-break;
-}
-}
+  for(let i=ai.length-1;i>=0;i--){
+    const enemy = ai[i];
 
-if(hitIndex===-1)continue;
+    // quick reject
+    if(dist(player.x, player.y, enemy.x, enemy.y) > 420) continue;
 
-if(enemy.length>player.length){
-alert("Game Over!");
-location.reload();
-return;
-}
+    // detect player head hit any enemy segment (skip enemy head index 0)
+    let hitIndex = -1;
+    const collideR = HEAD_R + enemy.segRadius * 1.05;
 
-const margin=8;
-const isMiddle=hitIndex>=margin && hitIndex<=enemy.segments.length-margin;
+    for(let sIdx=1; sIdx<enemy.segments.length; sIdx++){
+      const seg = enemy.segments[sIdx];
+      if(dist(player.x, player.y, seg.x, seg.y) < collideR){
+        hitIndex = sIdx;
+        break;
+      }
+    }
 
-if(isMiddle){
-const newSnakes=bisectSnake(enemy,hitIndex);
-ai.splice(i,1);
-ai.push(...newSnakes);
-player.grow(10);
-}else{
-player.grow(Math.floor(enemy.length*0.35));
-ai.splice(i,1);
-}
-}
+    if(hitIndex === -1) continue;
 
-while(ai.length<AI_COUNT){
-ai.push(new Snake(rand(0,WORLD_W),rand(0,WORLD_H),`hsl(${rand(0,360)},70%,55%)`));
-}
-}
+    // If enemy is larger, you die
+    if(enemy.length > player.length){
+      gameOver();
+      return;
+    }
 
-function drawBall(p,r,color){
-ctx.beginPath();
-ctx.arc(p.x,p.y,r,0,Math.PI*2);
-ctx.fillStyle=color;
-ctx.fill();
-}
+    // If enemy is smaller AND you hit the middle, bisect it
+    const MARGIN = 8;
+    const isMiddle = hitIndex >= MARGIN && hitIndex <= enemy.segments.length - 1 - MARGIN;
 
-function drawSnake(s,cam){
-for(let i=s.segments.length-1;i>=0;i--){
-const seg=s.segments[i];
-const p=worldToScreen(seg.x,seg.y,cam);
-const r=s.segRadius*p.s*(0.75+0.25*(1-i/s.segments.length));
-drawBall(p,r,s.color);
-}
+    if(isMiddle){
+      const parts = bisectSnake(enemy, hitIndex);
+      ai.splice(i, 1);
+      ai.push(...parts);
+      player.grow(8); // reward
+    } else {
+      // near ends: just "consume" the snake
+      player.grow(Math.floor(enemy.length * 0.30));
+      dropFoodFromSegments(enemy.segments, 0.20);
+      ai.splice(i, 1);
+    }
+  }
+
+  // keep AI count stable
+  while(ai.length < AI_TARGET){
+    ai.push(new Snake(rand(0,WORLD_W), rand(0,WORLD_H), `hsl(${rand(0,360)},70%,55%)`, false, null, Math.floor(rand(8, 22))));
+  }
 }
 
-function drawFood(f,cam){
-const p=worldToScreen(f.x,f.y,cam);
-drawBall(p,f.r*p.s,"lime");
+function drawShadow(p, radius){
+  ctx.save();
+  ctx.globalAlpha = 0.35;
+  ctx.beginPath();
+  ctx.ellipse(p.x, p.y + radius*0.55, radius*1.05, radius*0.55, 0, 0, Math.PI*2);
+  ctx.fillStyle = "#000";
+  ctx.fill();
+  ctx.restore();
+}
+
+function draw3DBall(p, radius, color){
+  drawShadow(p, radius);
+
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, radius, 0, Math.PI*2);
+  ctx.fillStyle = color;
+  ctx.fill();
+
+  ctx.beginPath();
+  ctx.arc(p.x - radius*0.25, p.y - radius*0.28, radius*0.45, 0, Math.PI*2);
+  ctx.fillStyle = "rgba(255,255,255,0.16)";
+  ctx.fill();
+
+  ctx.beginPath();
+  ctx.arc(p.x + radius*0.15, p.y + radius*0.18, radius*0.75, 0, Math.PI*2);
+  ctx.fillStyle = "rgba(0,0,0,0.12)";
+  ctx.fill();
+}
+
+function drawFood(f, cam){
+  const p = worldToScreen(f.x, f.y, cam);
+  const r = f.r * p.s;
+
+  ctx.save();
+  ctx.globalAlpha = 0.30;
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, r*2.2, 0, Math.PI*2);
+  ctx.fillStyle = "lime";
+  ctx.fill();
+  ctx.restore();
+
+  draw3DBall(p, r, "#32cd32");
+}
+
+function drawSnake(s, cam){
+  for(let i=s.segments.length-1; i>=0; i--){
+    const seg = s.segments[i];
+    const p = worldToScreen(seg.x, seg.y, cam);
+
+    const t = i / (s.segments.length-1 || 1);
+    const base = s.segRadius * (0.70 + 0.30*(1-t));
+    const r = base * p.s;
+
+    const depthTint = Math.floor((p.s - MIN_SCALE) / (MAX_SCALE - MIN_SCALE) * 24 - 14);
+    const body = (typeof s.color === "string" && s.color.startsWith("#"))
+      ? shade(s.color, depthTint)
+      : s.color;
+
+    draw3DBall(p, r, body);
+
+    // eyes on head
+    if(i === 0){
+      ctx.save();
+      ctx.globalAlpha = 0.9;
+      ctx.beginPath();
+      ctx.arc(p.x - r*0.25, p.y - r*0.05, Math.max(2, r*0.12), 0, Math.PI*2);
+      ctx.arc(p.x + r*0.10, p.y - r*0.05, Math.max(2, r*0.12), 0, Math.PI*2);
+      ctx.fillStyle = "#e2e8f0";
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+}
+
+function drawHUD(){
+  ctx.save();
+  ctx.fillStyle = "rgba(255,255,255,0.9)";
+  ctx.font = "14px system-ui, -apple-system, Segoe UI, Roboto, sans-serif";
+  ctx.fillText(`Length: ${player.length}   Speed: ${player.currentSpeed().toFixed(2)}   Enemies: ${ai.length}`, 12, canvas.height - 14);
+  ctx.restore();
 }
 
 function update(){
-player.update();
-ai.forEach(a=>a.update());
-eatFood(player);
-ai.forEach(a=>eatFood(a));
-respawnFood();
-snakeCombat();
+  if(dead) return;
+  ticks++;
+
+  player.update(food);
+  ai.forEach(s => s.update(food));
+
+  eatFood(player);
+  ai.forEach(s => eatFood(s));
+
+  ensureFood();
+  snakeCombat();
 }
 
-function render(){
-ctx.clearRect(0,0,canvas.width,canvas.height);
-food.forEach(f=>drawFood(f,{x:player.x,y:player.y}));
-ai.forEach(a=>drawSnake(a,{x:player.x,y:player.y}));
-drawSnake(player,{x:player.x,y:player.y});
+function render(cam){
+  drawGround(cam);
+
+  // sort by worldY so far draws first (depth feel)
+  const drawables = [];
+  for(const f of food) drawables.push({ y:f.y, type:"food", obj:f });
+  for(const s of ai)   drawables.push({ y:s.y, type:"snake", obj:s });
+  drawables.push({ y:player.y, type:"snake", obj:player });
+  drawables.sort((a,b)=>a.y-b.y);
+
+  for(const d of drawables){
+    if(d.type === "food") drawFood(d.obj, cam);
+    else drawSnake(d.obj, cam);
+  }
+
+  drawHUD();
 }
 
 function loop(){
-update();
-render();
-requestAnimationFrame(loop);
+  update();
+  render({ x: player.x, y: player.y });
+  requestAnimationFrame(loop);
 }
 loop();
-
 </script>
 </body>
 </html>
