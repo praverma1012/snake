@@ -1,378 +1,270 @@
 <!doctype html>
 <html>
 <head>
-  <meta charset="utf-8" />
-  <title>Snake Clash Lite — Fake 3D (Segmented)</title>
-  <style>
-    html, body { margin:0; padding:0; overflow:hidden; background:#0b0f14; }
-    canvas { display:block; }
-    .hint {
-      position: fixed; left: 12px; top: 10px; color: #cbd5e1;
-      font: 14px system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-      opacity: 0.9; user-select: none;
-    }
-  </style>
+<meta charset="utf-8">
+<title>Snake Clash – Fake 3D</title>
+<style>
+html,body{margin:0;padding:0;overflow:hidden;background:#0b0f14;}
+canvas{display:block;}
+</style>
 </head>
 <body>
 <canvas id="c"></canvas>
-<div class="hint">Move mouse • Eat green dots to grow length • Defeat smaller snakes</div>
-
 <script>
-const canvas = document.getElementById("c");
-const ctx = canvas.getContext("2d");
-function resize(){ canvas.width = innerWidth; canvas.height = innerHeight; }
-addEventListener("resize", resize); resize();
 
-const WORLD_W = 2600, WORLD_H = 2600;
-const FOOD_COUNT = 260;
-const AI_COUNT = 7;
+const canvas=document.getElementById("c");
+const ctx=canvas.getContext("2d");
+function resize(){canvas.width=innerWidth;canvas.height=innerHeight;}
+addEventListener("resize",resize);resize();
 
-// Fake-3D camera
-const CAMERA_TILT = 0.72;
-const MIN_SCALE = 0.55;
-const MAX_SCALE = 1.15;
-const HORIZON_PUSH = 140;
+const WORLD_W=2600,WORLD_H=2600;
+const FOOD_COUNT=250;
+const AI_COUNT=6;
 
-let mouse = { x: canvas.width/2, y: canvas.height/2 };
-addEventListener("mousemove", e => (mouse.x = e.clientX, mouse.y = e.clientY));
+const CAMERA_TILT=0.72;
+const MIN_SCALE=0.55;
+const MAX_SCALE=1.15;
+const HORIZON_PUSH=140;
 
-function clamp(v,a,b){ return Math.max(a, Math.min(b, v)); }
-function dist(ax,ay,bx,by){ return Math.hypot(ax-bx, ay-by); }
-function rand(a,b){ return a + Math.random()*(b-a); }
+let mouse={x:canvas.width/2,y:canvas.height/2};
+addEventListener("mousemove",e=>{mouse.x=e.clientX;mouse.y=e.clientY;});
 
-function shade(hex, amt){
-  const c = hex.replace("#","").match(/.{2}/g).map(x=>parseInt(x,16));
-  const t = c.map(v=>clamp(v+amt,0,255));
-  return "#" + t.map(v=>v.toString(16).padStart(2,"0")).join("");
+function clamp(v,a,b){return Math.max(a,Math.min(b,v));}
+function dist(ax,ay,bx,by){return Math.hypot(ax-bx,ay-by);}
+function rand(a,b){return a+Math.random()*(b-a);}
+
+function perspectiveFor(y){
+const t=clamp(y/WORLD_H,0,1);
+return MIN_SCALE+(MAX_SCALE-MIN_SCALE)*Math.pow(t,1.25);
 }
 
-function perspectiveFor(worldY){
-  const t = clamp(worldY / WORLD_H, 0, 1);
-  return MIN_SCALE + (MAX_SCALE - MIN_SCALE) * Math.pow(t, 1.25);
+function worldToScreen(wx,wy,cam){
+const s=perspectiveFor(wy);
+const rx=wx-cam.x;
+const ry=wy-cam.y;
+return{
+x:canvas.width/2+rx*s,
+y:canvas.height/2+(ry*s*CAMERA_TILT)-(1-s)*HORIZON_PUSH,
+s
+};
 }
 
-function worldToScreen(wx, wy, cam){
-  const s = perspectiveFor(wy);
-  const rx = wx - cam.x;
-  const ry = wy - cam.y;
-  const sx = canvas.width/2 + rx * s;
-  const sy = canvas.height/2 + (ry * s * CAMERA_TILT) - (1 - s) * HORIZON_PUSH;
-  return { x:sx, y:sy, s };
+class Food{
+constructor(){
+this.x=rand(0,WORLD_W);
+this.y=rand(0,WORLD_H);
+this.r=rand(5,7);
+}
 }
 
-function drawGround(cam){
-  const g = ctx.createLinearGradient(0, 0, 0, canvas.height);
-  g.addColorStop(0, "#070a0f");
-  g.addColorStop(0.55, "#0b1320");
-  g.addColorStop(1, "#071018");
-  ctx.fillStyle = g;
-  ctx.fillRect(0,0,canvas.width,canvas.height);
+class Snake{
+constructor(x,y,color,isPlayer=false,segments=null){
+this.isPlayer=isPlayer;
+this.color=color;
+this.x=x;this.y=y;
+this.vx=0;this.vy=0;
+this.speed=2.4;
+this.wander=rand(0,Math.PI*2);
+this.segRadius=11;
+this.spacing=7.5;
 
-  ctx.save();
-  ctx.globalAlpha = 0.28;
-
-  const step = 160;
-  const startX = Math.floor((cam.x - 1200)/step)*step;
-  const endX   = Math.ceil((cam.x + 1200)/step)*step;
-  const startY = Math.floor((cam.y - 1200)/step)*step;
-  const endY   = Math.ceil((cam.y + 1200)/step)*step;
-
-  for(let x = startX; x <= endX; x += step){
-    ctx.beginPath();
-    let first = true;
-    for(let y = startY; y <= endY; y += 80){
-      const p = worldToScreen(x, y, cam);
-      if(first){ ctx.moveTo(p.x, p.y); first=false; } else ctx.lineTo(p.x, p.y);
-    }
-    ctx.strokeStyle = "#1c2a3a";
-    ctx.lineWidth = 1;
-    ctx.stroke();
-  }
-
-  for(let y = startY; y <= endY; y += step){
-    ctx.beginPath();
-    let first = true;
-    for(let x = startX; x <= endX; x += 80){
-      const p = worldToScreen(x, y, cam);
-      if(first){ ctx.moveTo(p.x, p.y); first=false; } else ctx.lineTo(p.x, p.y);
-    }
-    ctx.strokeStyle = "#152235";
-    ctx.lineWidth = 1;
-    ctx.stroke();
-  }
-
-  ctx.restore();
+if(segments){
+this.segments=segments.map(p=>({x:p.x,y:p.y}));
+this.targetSegments=this.segments.length;
+this.x=this.segments[0].x;
+this.y=this.segments[0].y;
+}else{
+this.targetSegments=26;
+this.segments=[];
+for(let i=0;i<this.targetSegments;i++){
+this.segments.push({x:x-i*this.spacing,y});
+}
+}
 }
 
-class Food {
-  constructor(){
-    this.x = rand(0, WORLD_W);
-    this.y = rand(0, WORLD_H);
-    this.r = rand(5, 7);
-  }
+get length(){return this.targetSegments;}
+
+grow(n){
+this.targetSegments+=n;
+this.targetSegments=Math.min(this.targetSegments,260);
 }
 
-class Snake {
-  constructor(x,y,color,isPlayer=false){
-    this.isPlayer = isPlayer;
-    this.color = color;
+update(){
+let ax=0,ay=0;
 
-    // head
-    this.x = x; this.y = y;
-    this.vx = 0; this.vy = 0;
-
-    // movement + AI
-    this.speed = 2.35;
-    this.wander = rand(0, Math.PI*2);
-
-    // segmented body
-    this.segRadius = 11;
-    this.spacing = 7.5;               // desired distance between segment points
-    this.targetSegments = 26;         // length in segments
-    this.segments = [];
-    for(let i=0;i<this.targetSegments;i++){
-      this.segments.push({ x: x - i*this.spacing, y });
-    }
-  }
-
-  get length(){ return this.targetSegments; }
-  get hitRadius(){ return this.segRadius + 3; } // for collisions
-
-  grow(bySegments){
-    this.targetSegments += bySegments;
-    this.targetSegments = Math.min(this.targetSegments, 260);
-  }
-
-  update(){
-    let ax=0, ay=0;
-
-    if(this.isPlayer){
-      const dx = mouse.x - canvas.width/2;
-      const dy = mouse.y - canvas.height/2;
-      const ang = Math.atan2(dy, dx);
-      ax = Math.cos(ang);
-      ay = Math.sin(ang);
-    } else {
-      this.wander += rand(-0.10, 0.10);
-      ax = Math.cos(this.wander);
-      ay = Math.sin(this.wander);
-    }
-
-    const len = Math.hypot(ax,ay) || 1;
-    ax/=len; ay/=len;
-
-    // longer snakes a tiny bit slower (feels fair)
-    const speedFactor = 1.0 - Math.min(0.35, (this.targetSegments-26) * 0.0015);
-    const targetSpeed = this.speed * speedFactor;
-
-    this.vx = this.vx*0.84 + ax*targetSpeed*0.16;
-    this.vy = this.vy*0.84 + ay*targetSpeed*0.16;
-
-    this.x += this.vx;
-    this.y += this.vy;
-
-    this.x = clamp(this.x, 0, WORLD_W);
-    this.y = clamp(this.y, 0, WORLD_H);
-
-    // put new head point
-    this.segments[0].x = this.x;
-    this.segments[0].y = this.y;
-
-    // follow: each segment tries to stay 'spacing' behind the previous one
-    for(let i=1;i<this.segments.length;i++){
-      const prev = this.segments[i-1];
-      const cur  = this.segments[i];
-      const dx = cur.x - prev.x;
-      const dy = cur.y - prev.y;
-      const d = Math.hypot(dx,dy) || 0.0001;
-
-      const desired = this.spacing;
-      const pull = (d - desired) / d; // >0 if too far
-      cur.x -= dx * pull;
-      cur.y -= dy * pull;
-    }
-
-    // adjust array length to match targetSegments
-    while(this.segments.length < this.targetSegments){
-      const last = this.segments[this.segments.length - 1];
-      this.segments.push({ x: last.x, y: last.y });
-    }
-    if(this.segments.length > this.targetSegments){
-      this.segments.length = this.targetSegments;
-    }
-  }
+if(this.isPlayer){
+const dx=mouse.x-canvas.width/2;
+const dy=mouse.y-canvas.height/2;
+const ang=Math.atan2(dy,dx);
+ax=Math.cos(ang);ay=Math.sin(ang);
+}else{
+this.wander+=rand(-0.1,0.1);
+ax=Math.cos(this.wander);
+ay=Math.sin(this.wander);
 }
 
-const player = new Snake(WORLD_W/2, WORLD_H/2, "#22d3ee", true);
+const len=Math.hypot(ax,ay)||1;
+ax/=len;ay/=len;
 
-const ai = [];
+const speedFactor=1-Math.min(0.35,(this.targetSegments-26)*0.0015);
+const targetSpeed=this.speed*speedFactor;
+
+this.vx=this.vx*0.84+ax*targetSpeed*0.16;
+this.vy=this.vy*0.84+ay*targetSpeed*0.16;
+
+this.x+=this.vx;
+this.y+=this.vy;
+this.x=clamp(this.x,0,WORLD_W);
+this.y=clamp(this.y,0,WORLD_H);
+
+this.segments[0].x=this.x;
+this.segments[0].y=this.y;
+
+for(let i=1;i<this.segments.length;i++){
+const prev=this.segments[i-1];
+const cur=this.segments[i];
+const dx=cur.x-prev.x;
+const dy=cur.y-prev.y;
+const d=Math.hypot(dx,dy)||0.0001;
+const pull=(d-this.spacing)/d;
+cur.x-=dx*pull;
+cur.y-=dy*pull;
+}
+
+while(this.segments.length<this.targetSegments){
+const last=this.segments[this.segments.length-1];
+this.segments.push({x:last.x,y:last.y});
+}
+if(this.segments.length>this.targetSegments){
+this.segments.length=this.targetSegments;
+}
+}
+}
+
+const player=new Snake(WORLD_W/2,WORLD_H/2,"#22d3ee",true);
+
+let ai=[];
 for(let i=0;i<AI_COUNT;i++){
-  ai.push(new Snake(
-    rand(100, WORLD_W-100),
-    rand(100, WORLD_H-100),
-    `hsl(${rand(0,360)},70%,55%)`
-  ));
+ai.push(new Snake(rand(100,WORLD_W-100),rand(100,WORLD_H-100),`hsl(${rand(0,360)},70%,55%)`));
 }
 
-let food = Array.from({length: FOOD_COUNT}, ()=>new Food());
-function respawnFood(){ while(food.length < FOOD_COUNT) food.push(new Food()); }
+let food=Array.from({length:FOOD_COUNT},()=>new Food());
+function respawnFood(){while(food.length<FOOD_COUNT)food.push(new Food());}
 
-// Eat dots → grow LENGTH (segments)
 function eatFood(s){
-  for(let i=food.length-1;i>=0;i--){
-    const f = food[i];
-    // check head vs food
-    if(dist(s.x,s.y,f.x,f.y) < s.segRadius + 6){
-      s.grow(3);          // <-- how much length per dot
-      food.splice(i,1);
-    }
-  }
+for(let i=food.length-1;i>=0;i--){
+if(dist(s.x,s.y,food[i].x,food[i].y)<s.segRadius+6){
+s.grow(3);
+food.splice(i,1);
+}
+}
 }
 
-// simple “size” comparison: longer snake wins
+function bisectSnake(enemy,hitIndex){
+const left=enemy.segments.slice(0,hitIndex);
+const right=enemy.segments.slice(hitIndex+1);
+const parts=[];
+const MIN=10;
+
+if(left.length>=MIN){
+parts.push(new Snake(left[0].x,left[0].y,enemy.color,false,left));
+}else{
+left.forEach(p=>food.push(new Food()));
+}
+
+if(right.length>=MIN){
+parts.push(new Snake(right[0].x,right[0].y,enemy.color,false,right));
+}else{
+right.forEach(p=>food.push(new Food()));
+}
+
+return parts;
+}
+
 function snakeCombat(){
-  for(let i=ai.length-1;i>=0;i--){
-    const enemy = ai[i];
-    const d = dist(player.x, player.y, enemy.x, enemy.y);
+for(let i=ai.length-1;i>=0;i--){
+const enemy=ai[i];
+let hitIndex=-1;
 
-    // collide head-to-head-ish
-    if(d < player.hitRadius + enemy.hitRadius + 6){
-      if(player.length > enemy.length + 6){
-        player.grow(Math.floor(enemy.length * 0.35));
-        ai.splice(i,1);
-      } else if(enemy.length > player.length + 6){
-        gameOver();
-        return;
-      }
-    }
-  }
-
-  while(ai.length < AI_COUNT){
-    ai.push(new Snake(rand(0,WORLD_W), rand(0,WORLD_H), `hsl(${rand(0,360)},70%,55%)`));
-  }
+for(let s=1;s<enemy.segments.length;s++){
+if(dist(player.x,player.y,enemy.segments[s].x,enemy.segments[s].y)
+<player.segRadius+enemy.segRadius){
+hitIndex=s;
+break;
+}
 }
 
-let dead = false;
-function gameOver(){
-  if(dead) return;
-  dead = true;
-  setTimeout(()=>{ alert("Game Over!"); location.reload(); }, 50);
+if(hitIndex===-1)continue;
+
+if(enemy.length>player.length){
+alert("Game Over!");
+location.reload();
+return;
 }
 
-// Fake-3D draw
-function drawShadow(p, radius){
-  ctx.save();
-  ctx.globalAlpha = 0.35;
-  ctx.beginPath();
-  ctx.ellipse(p.x, p.y + radius*0.55, radius*1.05, radius*0.55, 0, 0, Math.PI*2);
-  ctx.fillStyle = "#000";
-  ctx.fill();
-  ctx.restore();
+const margin=8;
+const isMiddle=hitIndex>=margin && hitIndex<=enemy.segments.length-margin;
+
+if(isMiddle){
+const newSnakes=bisectSnake(enemy,hitIndex);
+ai.splice(i,1);
+ai.push(...newSnakes);
+player.grow(10);
+}else{
+player.grow(Math.floor(enemy.length*0.35));
+ai.splice(i,1);
+}
 }
 
-function draw3DBall(p, radius, color){
-  drawShadow(p, radius);
-
-  ctx.beginPath();
-  ctx.arc(p.x, p.y, radius, 0, Math.PI*2);
-  ctx.fillStyle = color;
-  ctx.fill();
-
-  ctx.beginPath();
-  ctx.arc(p.x - radius*0.25, p.y - radius*0.28, radius*0.45, 0, Math.PI*2);
-  ctx.fillStyle = "rgba(255,255,255,0.16)";
-  ctx.fill();
-
-  ctx.beginPath();
-  ctx.arc(p.x + radius*0.15, p.y + radius*0.18, radius*0.75, 0, Math.PI*2);
-  ctx.fillStyle = "rgba(0,0,0,0.12)";
-  ctx.fill();
+while(ai.length<AI_COUNT){
+ai.push(new Snake(rand(0,WORLD_W),rand(0,WORLD_H),`hsl(${rand(0,360)},70%,55%)`));
+}
 }
 
-function drawFood(f, cam){
-  const p = worldToScreen(f.x, f.y, cam);
-  const r = f.r * p.s;
-
-  ctx.save();
-  ctx.globalAlpha = 0.35;
-  ctx.beginPath();
-  ctx.arc(p.x, p.y, r*2.2, 0, Math.PI*2);
-  ctx.fillStyle = "lime";
-  ctx.fill();
-  ctx.restore();
-
-  draw3DBall(p, r, "#32cd32");
+function drawBall(p,r,color){
+ctx.beginPath();
+ctx.arc(p.x,p.y,r,0,Math.PI*2);
+ctx.fillStyle=color;
+ctx.fill();
 }
 
-function drawSnake(s, cam){
-  // draw from tail -> head so overlaps look right
-  for(let i=s.segments.length-1; i>=0; i--){
-    const seg = s.segments[i];
-    const p = worldToScreen(seg.x, seg.y, cam);
-
-    // slightly smaller tail
-    const t = i / (s.segments.length-1 || 1);
-    const base = s.segRadius * (0.75 + 0.25*(1-t));
-    const r = base * p.s;
-
-    const depthTint = Math.floor((p.s - MIN_SCALE) / (MAX_SCALE - MIN_SCALE) * 24 - 14);
-    const body = (typeof s.color === "string" && s.color.startsWith("#"))
-      ? shade(s.color, depthTint)
-      : s.color;
-
-    draw3DBall(p, r, body);
-
-    // simple “eyes” on head
-    if(i === 0){
-      ctx.save();
-      ctx.globalAlpha = 0.9;
-      ctx.beginPath();
-      ctx.arc(p.x - r*0.25, p.y - r*0.05, Math.max(2, r*0.12), 0, Math.PI*2);
-      ctx.arc(p.x + r*0.10, p.y - r*0.05, Math.max(2, r*0.12), 0, Math.PI*2);
-      ctx.fillStyle = "#e2e8f0";
-      ctx.fill();
-      ctx.restore();
-    }
-  }
+function drawSnake(s,cam){
+for(let i=s.segments.length-1;i>=0;i--){
+const seg=s.segments[i];
+const p=worldToScreen(seg.x,seg.y,cam);
+const r=s.segRadius*p.s*(0.75+0.25*(1-i/s.segments.length));
+drawBall(p,r,s.color);
+}
 }
 
-function drawHUD(){
-  ctx.save();
-  ctx.fillStyle = "rgba(255,255,255,0.9)";
-  ctx.font = "14px system-ui, -apple-system, Segoe UI, Roboto, sans-serif";
-  ctx.fillText(`Length: ${player.length}   Enemies: ${ai.length}`, 14, canvas.height - 16);
-  ctx.restore();
+function drawFood(f,cam){
+const p=worldToScreen(f.x,f.y,cam);
+drawBall(p,f.r*p.s,"lime");
 }
 
 function update(){
-  if(dead) return;
-  player.update();
-  ai.forEach(s => s.update());
-
-  eatFood(player);
-  ai.forEach(s => eatFood(s));
-
-  respawnFood();
-  snakeCombat();
+player.update();
+ai.forEach(a=>a.update());
+eatFood(player);
+ai.forEach(a=>eatFood(a));
+respawnFood();
+snakeCombat();
 }
 
-function render(cam){
-  drawGround(cam);
-
-  // draw food first, then snakes
-  food.forEach(f => drawFood(f, cam));
-  ai.forEach(s => drawSnake(s, cam));
-  drawSnake(player, cam);
-
-  drawHUD();
+function render(){
+ctx.clearRect(0,0,canvas.width,canvas.height);
+food.forEach(f=>drawFood(f,{x:player.x,y:player.y}));
+ai.forEach(a=>drawSnake(a,{x:player.x,y:player.y}));
+drawSnake(player,{x:player.x,y:player.y});
 }
 
 function loop(){
-  update();
-  render({x: player.x, y: player.y});
-  requestAnimationFrame(loop);
+update();
+render();
+requestAnimationFrame(loop);
 }
 loop();
+
 </script>
 </body>
 </html>
